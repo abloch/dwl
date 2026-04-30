@@ -1,4 +1,5 @@
 dwl
+dwl-cli
 *.o
 *-protocol.c
 *-protocol.h

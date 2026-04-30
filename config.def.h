@@ -7,21 +7,21 @@
 static const int sloppyfocus               = 1;  /* focus follows mouse */
 static const int bypass_surface_visibility = 0;  /* 1 means idle inhibitors will disable idle tracking even if it's surface isn't visible  */
 static const int enablegaps                = 1;  /* 1 means gaps are enabled */
-static const int smartgaps                 = 0;  /* 1 means no outer gap when there is only one window */
+static const int smartgaps                 = 1;  /* 1 means no outer gap when there is only one window */
 static const int monoclegaps               = 0;  /* 1 means outer gaps in monocle layout */
-static const unsigned int borderpx         = 1;  /* border pixel of windows */
-static const unsigned int gappih           = 10; /* horiz inner gap between windows */
-static const unsigned int gappiv           = 10; /* vert inner gap between windows */
-static const unsigned int gappoh           = 10; /* horiz outer gap between windows and screen edge */
-static const unsigned int gappov           = 10; /* vert outer gap between windows and screen edge */
+static const unsigned int borderpx         = 4;  /* border pixel of windows */
+static const unsigned int gappih           = 7; /* horiz inner gap between windows */
+static const unsigned int gappiv           = 7; /* vert inner gap between windows */
+static const unsigned int gappoh           = 3; /* horiz outer gap between windows and screen edge */
+static const unsigned int gappov           = 3; /* vert outer gap between windows and screen edge */
 static const float rootcolor[]             = COLOR(0x222222ff);
 static const float bordercolor[]           = COLOR(0x444444ff);
 static const float focuscolor[]            = COLOR(0x005577ff);
 static const float urgentcolor[]           = COLOR(0xff0000ff);
 /* This conforms to the xdg-protocol. Set the alpha to zero to restore the old behavior */
 static const float fullscreen_bg[]         = {0.0f, 0.0f, 0.0f, 1.0f}; /* You can also use glsl colors */
-static const float default_opacity_unfocus = 0.70f;
-static const float default_opacity_focus   = 1.00f;
+static const float default_opacity_unfocus = 0.85f;
+static const float default_opacity_focus   = 0.95f;
 
 /* tagging - TAGCOUNT must be no greater than 31 */
 #define TAGCOUNT (9)
@@ -33,6 +33,7 @@ static const Rule rules[] = {
 	/* app_id             title       tags mask     isfloating   alpha			monitor */
 	{ "obsidian",         NULL,       1 << 5,       0,           default_opacity_focus,	-1 },
 	{ "helium",           NULL,       1,            0,           default_opacity_focus,	-1 },
+	{ "foot",             NULL,       1 << 2,       0,           default_opacity_focus,	-1 },
     /* default/example rule: can be changed but cannot be eliminated; at least one rule must exist */
 };
 
@@ -129,6 +130,8 @@ static const char *menucmd[]  = { "fuzzel", NULL };
 static const char *hintscmd[] = { "/home/akiva/.local/bin/hints", NULL };
 static const char *lockcmd[]  = { "hyprlock", NULL };
 
+#define WLR_MODIFIER_LCAG WLR_MODIFIER_CTRL|WLR_MODIFIER_ALT|WLR_MODIFIER_LOGO
+
 static const Key keys[] = {
 	/* Note that Shift changes certain key codes: 2 -> at, etc. */
 	/* modifier                  key                  function          argument */
@@ -147,7 +150,7 @@ static const Key keys[] = {
 	{ MODKEY,                    XKB_KEY_Tab,         view,             {0} },
 	{ MODKEY,                    XKB_KEY_q,           killclient,       {0} },
 //	{ MODKEY,                    XKB_KEY_t,           setlayout,        {.v = &layouts[0]} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_T,           spawn,            SHCMD("~/bin/spawn_or_focus myterm foot") },
+	{ WLR_MODIFIER_LCAG,         XKB_KEY_T,           spawn,            SHCMD("/home/akiva/bin/focus_or_spawn myterm foot") },
 //	{ MODKEY,                    XKB_KEY_f,           setlayout,        {.v = &layouts[1]} },
 //	{ MODKEY,                    XKB_KEY_m,           setlayout,        {.v = &layouts[2]} },
 //	{ MODKEY,                    XKB_KEY_space,       setlayout,        {0} },
