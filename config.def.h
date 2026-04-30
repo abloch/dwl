@@ -150,7 +150,7 @@ static const Key keys[] = {
 	{ MODKEY,                    XKB_KEY_Tab,         view,             {0} },
 	{ MODKEY,                    XKB_KEY_q,           killclient,       {0} },
 //	{ MODKEY,                    XKB_KEY_t,           setlayout,        {.v = &layouts[0]} },
-	{ WLR_MODIFIER_LCAG,         XKB_KEY_T,           spawn,            SHCMD("/home/akiva/bin/focus_or_spawn myterm foot") },
+	{ WLR_MODIFIER_LCAG,         XKB_KEY_T,           spawn,            SHCMD("/home/akiva/bin/focus_or_spawn foot foot") },
 //	{ MODKEY,                    XKB_KEY_f,           setlayout,        {.v = &layouts[1]} },
 //	{ MODKEY,                    XKB_KEY_m,           setlayout,        {.v = &layouts[2]} },
 //	{ MODKEY,                    XKB_KEY_space,       setlayout,        {0} },
