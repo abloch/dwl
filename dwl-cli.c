@@ -85,6 +85,11 @@ struct Toplevel {
 	char identifier[64];
 	char title[512];
 	char appid[256];
+
+	/* watch-mode snapshot */
+	int watch_initialized;
+	char prev_title[512];
+	char prev_appid[256];
 };
 
 static struct wl_display *display;
@@ -242,8 +247,76 @@ ipc_layout_symbol(void *data, struct zdwl_ipc_output_v2 *o, const char *sym)
 
 /* forward declarations for diff helpers defined in the JSON build section */
 static struct json_object *build_output_json(struct Output *o);
+static struct json_object *tags_to_array(uint32_t mask);
 static void snapshot_output(struct Output *out);
 static void emit_output_diff(struct Output *out);
+static void emit_output_initial(struct Output *out);
+
+/* ---------------- canonical watch event builders ---------------- *
+ *
+ * Every change in watch mode is encoded as one event:
+ *   { "type": <entity>, "op": <add|update|remove>, "id"?: <scalar>, "fields"?: {...} }
+ *
+ * Events are grouped under a frame envelope so a single state transition
+ * remains atomic for the consumer:
+ *   { "frame": <output-name | "toplevels">, "events": [ ... ] }
+ *
+ * Frames with zero events are suppressed.
+ */
+
+static struct json_object *
+new_event(const char *type, const char *op)
+{
+	struct json_object *e = json_object_new_object();
+	json_object_object_add(e, "type", json_object_new_string(type));
+	json_object_object_add(e, "op",   json_object_new_string(op));
+	return e;
+}
+
+static void
+event_set_id_str(struct json_object *e, const char *id)
+{
+	json_object_object_add(e, "id", json_object_new_string(id));
+}
+
+static void
+event_set_id_int(struct json_object *e, int32_t id)
+{
+	json_object_object_add(e, "id", json_object_new_int(id));
+}
+
+/* Lazy-create the "fields" sub-object on an event. */
+static struct json_object *
+event_fields(struct json_object *e)
+{
+	struct json_object *f;
+	if (!json_object_object_get_ex(e, "fields", &f)) {
+		f = json_object_new_object();
+		json_object_object_add(e, "fields", f);
+	}
+	return f;
+}
+
+static struct json_object *
+new_frame(const char *frame_name)
+{
+	struct json_object *f = json_object_new_object();
+	json_object_object_add(f, "frame",  json_object_new_string(frame_name));
+	json_object_object_add(f, "events", json_object_new_array());
+	return f;
+}
+
+static void
+emit_frame(struct json_object *frame)
+{
+	struct json_object *events;
+	if (json_object_object_get_ex(frame, "events", &events) &&
+	    json_object_array_length(events) > 0) {
+		puts(json_object_to_json_string_ext(frame, JSON_C_TO_STRING_PLAIN));
+		fflush(stdout);
+	}
+	json_object_put(frame);
+}
 
 static void
 ipc_frame(void *data, struct zdwl_ipc_output_v2 *o)
@@ -254,11 +327,11 @@ ipc_frame(void *data, struct zdwl_ipc_output_v2 *o)
 	if (is_watch) {
 		if (!out->watch_initialized) {
 			out->watch_initialized = 1;
-			snapshot_output(out);
+			emit_output_initial(out);
 		} else {
 			emit_output_diff(out);
-			snapshot_output(out);
 		}
+		snapshot_output(out);
 	}
 	wl_list_for_each_safe(ci, tmp, &out->clients, link) {
 		wl_list_remove(&ci->link);
@@ -316,13 +389,78 @@ static void
 tl_closed(void *data, struct ext_foreign_toplevel_handle_v1 *h)
 {
 	struct Toplevel *t = data;
+
+	if (is_watch && t->watch_initialized) {
+		struct json_object *frame, *events, *e;
+		frame = new_frame("toplevels");
+		json_object_object_get_ex(frame, "events", &events);
+		e = new_event("toplevel", "remove");
+		event_set_id_str(e, t->identifier);
+		json_object_array_add(events, e);
+		emit_frame(frame);
+	}
+
 	wl_list_remove(&t->link);
 	ext_foreign_toplevel_handle_v1_destroy(h);
 	free(t);
 }
 
+/*
+ * tl_done marks the end of a toplevel's property batch (per the
+ * ext_foreign_toplevel_handle_v1 protocol). In watch mode we use it as the
+ * trigger to emit either an "add" event (first batch, full fields) or an
+ * "update" event (subsequent batches, only changed fields).
+ */
 static void
-tl_done(void *data, struct ext_foreign_toplevel_handle_v1 *h) { }
+tl_done(void *data, struct ext_foreign_toplevel_handle_v1 *h)
+{
+	struct Toplevel *t = data;
+	struct json_object *frame, *events, *e;
+
+	if (!is_watch)
+		return;
+	if (t->identifier[0] == '\0')
+		return; /* identifier not yet known — wait for next batch */
+
+	frame = new_frame("toplevels");
+	json_object_object_get_ex(frame, "events", &events);
+
+	if (!t->watch_initialized) {
+		t->watch_initialized = 1;
+		e = new_event("toplevel", "add");
+		event_set_id_str(e, t->identifier);
+		json_object_object_add(event_fields(e), "title",
+				json_object_new_string(t->title));
+		json_object_object_add(event_fields(e), "appid",
+				json_object_new_string(t->appid));
+		json_object_array_add(events, e);
+	} else {
+		e = NULL;
+		if (strcmp(t->title, t->prev_title) != 0) {
+			if (!e) {
+				e = new_event("toplevel", "update");
+				event_set_id_str(e, t->identifier);
+			}
+			json_object_object_add(event_fields(e), "title",
+					json_object_new_string(t->title));
+		}
+		if (strcmp(t->appid, t->prev_appid) != 0) {
+			if (!e) {
+				e = new_event("toplevel", "update");
+				event_set_id_str(e, t->identifier);
+			}
+			json_object_object_add(event_fields(e), "appid",
+					json_object_new_string(t->appid));
+		}
+		if (e)
+			json_object_array_add(events, e);
+	}
+
+	snprintf(t->prev_title, sizeof t->prev_title, "%s", t->title);
+	snprintf(t->prev_appid, sizeof t->prev_appid, "%s", t->appid);
+
+	emit_frame(frame);
+}
 
 static void
 tl_title(void *data, struct ext_foreign_toplevel_handle_v1 *h, const char *title)
@@ -485,91 +623,102 @@ snapshot_output(struct Output *out)
 static void
 emit_output_diff(struct Output *out)
 {
-	struct json_object *diff, *changed_tags, *added, *removed, *changed_clients;
+	struct json_object *frame, *events, *e;
 	struct ClientInfo *ci, *prev_ci;
 	uint32_t i;
-	int any = 0;
 
-	diff = json_object_new_object();
-	json_object_object_add(diff, "output", json_object_new_string(out->name));
+	frame = new_frame(out->name);
+	json_object_object_get_ex(frame, "events", &events);
 
+	/* output scalar updates — batched into one event */
+	e = NULL;
 #define DIFF_UINT(field, key) \
 	if (out->field != out->prev_##field) { \
-		json_object_object_add(diff, (key), json_object_new_int((int32_t)out->field)); \
-		any = 1; \
+		if (!e) e = new_event("output", "update"); \
+		json_object_object_add(event_fields(e), (key), \
+				json_object_new_int((int32_t)out->field)); \
 	}
 	DIFF_UINT(active,     "active")
 	DIFF_UINT(fullscreen, "fullscreen")
 	DIFF_UINT(floating,   "floating")
 #undef DIFF_UINT
+#define DIFF_STR(field, key) \
+	if (strcmp(out->field, out->prev_##field) != 0) { \
+		if (!e) e = new_event("output", "update"); \
+		json_object_object_add(event_fields(e), (key), \
+				json_object_new_string(out->field)); \
+	}
+	DIFF_STR(title, "title")
+	DIFF_STR(appid, "appid")
+#undef DIFF_STR
+	if (e)
+		json_object_array_add(events, e);
 
+	/* layout update */
 	if (out->layout_index != out->prev_layout_index ||
 	    strcmp(out->layout_symbol, out->prev_layout_symbol) != 0) {
-		struct json_object *lo = json_object_new_object();
-		json_object_object_add(lo, "index",  json_object_new_int((int32_t)out->layout_index));
-		json_object_object_add(lo, "symbol", json_object_new_string(out->layout_symbol));
-		json_object_object_add(lo, "name",
+		e = new_event("layout", "update");
+		json_object_object_add(event_fields(e), "index",
+				json_object_new_int((int32_t)out->layout_index));
+		json_object_object_add(event_fields(e), "symbol",
+				json_object_new_string(out->layout_symbol));
+		json_object_object_add(event_fields(e), "name",
 				out->layout_index < (uint32_t)mgr_layout_count
 				? json_object_new_string(mgr_layouts[out->layout_index]) : NULL);
-		json_object_object_add(diff, "layout", lo);
-		any = 1;
-	}
-	if (strcmp(out->title, out->prev_title) != 0) {
-		json_object_object_add(diff, "title", json_object_new_string(out->title));
-		any = 1;
-	}
-	if (strcmp(out->appid, out->prev_appid) != 0) {
-		json_object_object_add(diff, "appid", json_object_new_string(out->appid));
-		any = 1;
+		json_object_array_add(events, e);
 	}
 
-	changed_tags = json_object_new_array();
+	/* tag updates — only changed fields per tag */
 	for (i = 0; i < mgr_tag_count; i++) {
 		struct TagState *cur = &out->tags[i];
 		struct TagState *prv = &out->prev_tags[i];
-		if (cur->state != prv->state || cur->clients != prv->clients ||
-		    cur->focused != prv->focused) {
-			struct json_object *t = json_object_new_object();
-			json_object_object_add(t, "index",   json_object_new_int((int32_t)(i + 1)));
-			json_object_object_add(t, "state",   json_object_new_int((int32_t)cur->state));
-			json_object_object_add(t, "clients", json_object_new_int((int32_t)cur->clients));
-			json_object_object_add(t, "focused", json_object_new_int((int32_t)cur->focused));
-			json_object_array_add(changed_tags, t);
-			any = 1;
-		}
+		if (cur->state == prv->state && cur->clients == prv->clients &&
+		    cur->focused == prv->focused)
+			continue;
+		e = new_event("tag", "update");
+		event_set_id_int(e, (int32_t)(i + 1));
+		if (cur->state != prv->state)
+			json_object_object_add(event_fields(e), "state",
+					json_object_new_int((int32_t)cur->state));
+		if (cur->clients != prv->clients)
+			json_object_object_add(event_fields(e), "clients",
+					json_object_new_int((int32_t)cur->clients));
+		if (cur->focused != prv->focused)
+			json_object_object_add(event_fields(e), "focused",
+					json_object_new_int((int32_t)cur->focused));
+		json_object_array_add(events, e);
 	}
-	if (json_object_array_length(changed_tags) > 0)
-		json_object_object_add(diff, "tags", changed_tags);
-	else
-		json_object_put(changed_tags);
 
-	added           = json_object_new_array();
-	removed         = json_object_new_array();
-	changed_clients = json_object_new_array();
-
+	/* client adds and updates */
 	wl_list_for_each(ci, &out->clients, link) {
 		prev_ci = find_client_in_list(&out->prev_clients, ci->identifier);
 		if (!prev_ci) {
-			struct json_object *c = json_object_new_object();
-			json_object_object_add(c, "identifier", json_object_new_string(ci->identifier));
-			json_object_object_add(c, "tags",       tags_to_array(ci->tags));
-			json_object_object_add(c, "focused",    json_object_new_int((int32_t)ci->focused));
-			json_object_object_add(c, "urgent",     json_object_new_int((int32_t)ci->urgent));
-			json_object_object_add(c, "floating",   json_object_new_int((int32_t)ci->floating));
-			json_object_object_add(c, "fullscreen", json_object_new_int((int32_t)ci->fullscreen));
-			json_object_array_add(added, c);
-			any = 1;
+			e = new_event("client", "add");
+			event_set_id_str(e, ci->identifier);
+			json_object_object_add(event_fields(e), "tags",
+					tags_to_array(ci->tags));
+			json_object_object_add(event_fields(e), "focused",
+					json_object_new_int((int32_t)ci->focused));
+			json_object_object_add(event_fields(e), "urgent",
+					json_object_new_int((int32_t)ci->urgent));
+			json_object_object_add(event_fields(e), "floating",
+					json_object_new_int((int32_t)ci->floating));
+			json_object_object_add(event_fields(e), "fullscreen",
+					json_object_new_int((int32_t)ci->fullscreen));
+			json_object_array_add(events, e);
 		} else {
-			struct json_object *c = json_object_new_object();
 			int cdiff = 0;
-			json_object_object_add(c, "identifier", json_object_new_string(ci->identifier));
+			e = new_event("client", "update");
+			event_set_id_str(e, ci->identifier);
 			if (ci->tags != prev_ci->tags) {
-				json_object_object_add(c, "tags", tags_to_array(ci->tags));
+				json_object_object_add(event_fields(e), "tags",
+						tags_to_array(ci->tags));
 				cdiff = 1;
 			}
 #define CDIFF_UINT(field, key) \
 			if (ci->field != prev_ci->field) { \
-				json_object_object_add(c, (key), json_object_new_int((int32_t)ci->field)); \
+				json_object_object_add(event_fields(e), (key), \
+						json_object_new_int((int32_t)ci->field)); \
 				cdiff = 1; \
 			}
 			CDIFF_UINT(focused,    "focused")
@@ -577,39 +726,94 @@ emit_output_diff(struct Output *out)
 			CDIFF_UINT(floating,   "floating")
 			CDIFF_UINT(fullscreen, "fullscreen")
 #undef CDIFF_UINT
-			if (cdiff) {
-				json_object_array_add(changed_clients, c);
-				any = 1;
-			} else {
-				json_object_put(c);
-			}
+			if (cdiff)
+				json_object_array_add(events, e);
+			else
+				json_object_put(e);
 		}
 	}
+
+	/* client removes */
 	wl_list_for_each(prev_ci, &out->prev_clients, link) {
 		if (!find_client_in_list(&out->clients, prev_ci->identifier)) {
-			json_object_array_add(removed, json_object_new_string(prev_ci->identifier));
-			any = 1;
+			e = new_event("client", "remove");
+			event_set_id_str(e, prev_ci->identifier);
+			json_object_array_add(events, e);
 		}
 	}
 
-	if (json_object_array_length(added) > 0)
-		json_object_object_add(diff, "clients_added", added);
-	else
-		json_object_put(added);
-	if (json_object_array_length(removed) > 0)
-		json_object_object_add(diff, "clients_removed", removed);
-	else
-		json_object_put(removed);
-	if (json_object_array_length(changed_clients) > 0)
-		json_object_object_add(diff, "clients_changed", changed_clients);
-	else
-		json_object_put(changed_clients);
+	emit_frame(frame);
+}
 
-	if (any) {
-		puts(json_object_to_json_string_ext(diff, JSON_C_TO_STRING_PLAIN));
-		fflush(stdout);
+static void
+emit_output_initial(struct Output *out)
+{
+	struct json_object *frame, *events, *e;
+	struct ClientInfo *ci;
+	uint32_t i;
+
+	frame = new_frame(out->name);
+	json_object_object_get_ex(frame, "events", &events);
+
+	/* output scalars */
+	e = new_event("output", "add");
+	json_object_object_add(event_fields(e), "active",
+			json_object_new_int((int32_t)out->active));
+	json_object_object_add(event_fields(e), "fullscreen",
+			json_object_new_int((int32_t)out->fullscreen));
+	json_object_object_add(event_fields(e), "floating",
+			json_object_new_int((int32_t)out->floating));
+	json_object_object_add(event_fields(e), "title",
+			json_object_new_string(out->title));
+	json_object_object_add(event_fields(e), "appid",
+			json_object_new_string(out->appid));
+	json_object_array_add(events, e);
+
+	/* layout */
+	e = new_event("layout", "add");
+	json_object_object_add(event_fields(e), "index",
+			json_object_new_int((int32_t)out->layout_index));
+	json_object_object_add(event_fields(e), "symbol",
+			json_object_new_string(out->layout_symbol));
+	json_object_object_add(event_fields(e), "name",
+			out->layout_index < (uint32_t)mgr_layout_count
+			? json_object_new_string(mgr_layouts[out->layout_index]) : NULL);
+	json_object_array_add(events, e);
+
+	/* tags with any non-zero field */
+	for (i = 0; i < mgr_tag_count; i++) {
+		struct TagState *t = &out->tags[i];
+		if (t->state == 0 && t->clients == 0 && t->focused == 0)
+			continue;
+		e = new_event("tag", "add");
+		event_set_id_int(e, (int32_t)(i + 1));
+		json_object_object_add(event_fields(e), "state",
+				json_object_new_int((int32_t)t->state));
+		json_object_object_add(event_fields(e), "clients",
+				json_object_new_int((int32_t)t->clients));
+		json_object_object_add(event_fields(e), "focused",
+				json_object_new_int((int32_t)t->focused));
+		json_object_array_add(events, e);
 	}
-	json_object_put(diff);
+
+	/* clients */
+	wl_list_for_each(ci, &out->clients, link) {
+		e = new_event("client", "add");
+		event_set_id_str(e, ci->identifier);
+		json_object_object_add(event_fields(e), "tags",
+				tags_to_array(ci->tags));
+		json_object_object_add(event_fields(e), "focused",
+				json_object_new_int((int32_t)ci->focused));
+		json_object_object_add(event_fields(e), "urgent",
+				json_object_new_int((int32_t)ci->urgent));
+		json_object_object_add(event_fields(e), "floating",
+				json_object_new_int((int32_t)ci->floating));
+		json_object_object_add(event_fields(e), "fullscreen",
+				json_object_new_int((int32_t)ci->fullscreen));
+		json_object_array_add(events, e);
+	}
+
+	emit_frame(frame);
 }
 
 static struct json_object *
