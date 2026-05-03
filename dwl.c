@@ -317,6 +317,9 @@ static void dwl_ipc_output_set_client_tags(struct wl_client *client, struct wl_r
 static void dwl_ipc_output_set_layout(struct wl_client *client, struct wl_resource *resource, uint32_t index);
 static void dwl_ipc_output_set_tags(struct wl_client *client, struct wl_resource *resource, uint32_t tagmask, uint32_t toggle_tagset);
 static void dwl_ipc_output_release(struct wl_client *client, struct wl_resource *resource);
+static void dwl_ipc_output_focus_client(struct wl_client *client, struct wl_resource *resource, const char *identifier);
+static void dwl_ipc_output_set_client_tags_by_id(struct wl_client *client, struct wl_resource *resource, const char *identifier, uint32_t and_tags, uint32_t xor_tags);
+static void dwl_ipc_output_set_client_urgent(struct wl_client *client, struct wl_resource *resource, const char *identifier, uint32_t urgent);
 static void focusclient(Client *c, int lift);
 static void focusmon(const Arg *arg);
 static void focusstack(const Arg *arg);
@@ -488,7 +491,7 @@ static struct wl_listener new_session_lock = {.notify = locksession};
 static int resizelock = 0;   /* do not actually resize during arrange */
 
 static struct zdwl_ipc_manager_v2_interface dwl_manager_implementation = {.release = dwl_ipc_manager_release, .get_output = dwl_ipc_manager_get_output};
-static struct zdwl_ipc_output_v2_interface dwl_output_implementation = {.release = dwl_ipc_output_release, .set_tags = dwl_ipc_output_set_tags, .set_layout = dwl_ipc_output_set_layout, .set_client_tags = dwl_ipc_output_set_client_tags};
+static struct zdwl_ipc_output_v2_interface dwl_output_implementation = {.release = dwl_ipc_output_release, .set_tags = dwl_ipc_output_set_tags, .set_layout = dwl_ipc_output_set_layout, .set_client_tags = dwl_ipc_output_set_client_tags, .focus_client = dwl_ipc_output_focus_client, .set_client_tags_by_id = dwl_ipc_output_set_client_tags_by_id, .set_client_urgent = dwl_ipc_output_set_client_urgent};
 
 #ifdef XWAYLAND
 static void activatex11(struct wl_listener *listener, void *data);
@@ -1736,6 +1739,56 @@ void
 dwl_ipc_output_release(struct wl_client *client, struct wl_resource *resource)
 {
 	wl_resource_destroy(resource);
+}
+
+void
+dwl_ipc_output_focus_client(struct wl_client *wl_client, struct wl_resource *resource, const char *identifier)
+{
+	Client *c;
+	wl_list_for_each(c, &clients, link) {
+		if (c->foreign_toplevel &&
+				strcmp(c->foreign_toplevel->identifier, identifier) == 0) {
+			focusclient(c, 1);
+			printstatus();
+			return;
+		}
+	}
+}
+
+void
+dwl_ipc_output_set_client_tags_by_id(struct wl_client *wl_client, struct wl_resource *resource,
+		const char *identifier, uint32_t and_tags, uint32_t xor_tags)
+{
+	Client *c;
+	unsigned int newtags;
+	wl_list_for_each(c, &clients, link) {
+		if (c->foreign_toplevel &&
+				strcmp(c->foreign_toplevel->identifier, identifier) == 0) {
+			newtags = (c->tags & and_tags) ^ xor_tags;
+			if (!newtags)
+				return;
+			c->tags = newtags;
+			arrange(c->mon);
+			printstatus();
+			return;
+		}
+	}
+}
+
+void
+dwl_ipc_output_set_client_urgent(struct wl_client *wl_client, struct wl_resource *resource,
+		const char *identifier, uint32_t urgent)
+{
+	Client *c;
+	wl_list_for_each(c, &clients, link) {
+		if (c->foreign_toplevel &&
+				strcmp(c->foreign_toplevel->identifier, identifier) == 0) {
+			c->isurgent = urgent ? 1 : 0;
+			client_set_border_color(c, urgent ? urgentcolor : (c == focustop(c->mon) ? focuscolor : bordercolor));
+			printstatus();
+			return;
+		}
+	}
 }
 
 void
@@ -3133,7 +3186,7 @@ setup(void)
 	wl_signal_add(&output_mgr->events.apply, &output_mgr_apply);
 	wl_signal_add(&output_mgr->events.test, &output_mgr_test);
 
-	wl_global_create(dpy, &zdwl_ipc_manager_v2_interface, 2, NULL, dwl_ipc_manager_bind);
+	wl_global_create(dpy, &zdwl_ipc_manager_v2_interface, 4, NULL, dwl_ipc_manager_bind);
 
 	/* Make sure XWayland clients don't connect to the parent X server,
 	 * e.g when running in the x11 backend or the wayland backend and the

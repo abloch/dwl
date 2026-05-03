@@ -70,16 +70,16 @@ wlr-output-power-management-unstable-v1-protocol.h:
 xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
-dwl-ipc-unstable-v2-protocol.h:
+dwl-ipc-unstable-v2-protocol.h: protocols/dwl-ipc-unstable-v2.xml
 	$(WAYLAND_SCANNER) server-header \
 		protocols/dwl-ipc-unstable-v2.xml $@
-dwl-ipc-unstable-v2-protocol.c:
+dwl-ipc-unstable-v2-protocol.c: protocols/dwl-ipc-unstable-v2.xml
 	$(WAYLAND_SCANNER) private-code \
 		protocols/dwl-ipc-unstable-v2.xml $@
-dwl-ipc-unstable-v2-client-protocol.h:
+dwl-ipc-unstable-v2-client-protocol.h: protocols/dwl-ipc-unstable-v2.xml
 	$(WAYLAND_SCANNER) client-header \
 		protocols/dwl-ipc-unstable-v2.xml $@
-dwl-ipc-unstable-v2-client-protocol.c:
+dwl-ipc-unstable-v2-client-protocol.c: protocols/dwl-ipc-unstable-v2.xml
 	$(WAYLAND_SCANNER) private-code \
 		protocols/dwl-ipc-unstable-v2.xml $@
 ext-foreign-toplevel-list-v1-protocol.h:
@@ -108,7 +108,7 @@ dist: clean
 	tar -caf dwl-$(VERSION).tar.gz dwl-$(VERSION)
 	rm -rf dwl-$(VERSION)
 
-install: dwl
+install: dwl dwl-cli
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	rm -f $(DESTDIR)$(PREFIX)/bin/dwl
 	cp -f dwl $(DESTDIR)$(PREFIX)/bin
@@ -119,6 +119,9 @@ install: dwl
 	mkdir -p $(DESTDIR)$(DATADIR)/wayland-sessions
 	cp -f dwl.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
 	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
+	rm -f $(DESTDIR)$(PREFIX)/bin/dwl-cli
+	cp -f dwl-cli $(DESTDIR)$(PREFIX)/bin/
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/dwl-cli
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/dwl $(DESTDIR)$(MANDIR)/man1/dwl.1 \
 		$(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop

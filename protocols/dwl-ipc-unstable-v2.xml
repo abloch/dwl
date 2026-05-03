@@ -19,7 +19,7 @@ I would probably just submit raphi's patchset but I don't think that would be po
       reset.
   </description>
 
-  <interface name="zdwl_ipc_manager_v2" version="2">
+  <interface name="zdwl_ipc_manager_v2" version="4">
     <description summary="manage dwl state">
       This interface is exposed as a global in wl_registry.
 
@@ -60,7 +60,7 @@ I would probably just submit raphi's patchset but I don't think that would be po
     </event>
   </interface>
 
-  <interface name="zdwl_ipc_output_v2" version="3">
+  <interface name="zdwl_ipc_output_v2" version="4">
     <description summary="control dwl output">
       Observe and control a dwl output.
 
@@ -192,5 +192,27 @@ I would probably just submit raphi's patchset but I don't think that would be po
       <arg name="floating" type="uint" summary="nonzero if the client is floating"/>
       <arg name="fullscreen" type="uint" summary="nonzero if the client is fullscreen"/>
     </event>
+
+    <!-- Version 4 -->
+    <request name="focus_client" since="4">
+      <description summary="Focus a client by identifier"/>
+      <arg name="identifier" type="string" summary="ext_foreign_toplevel identifier of the client to focus"/>
+    </request>
+
+    <request name="set_client_tags_by_id" since="4">
+      <description summary="Set the tags of a specific client by identifier.">
+        The tags are updated as follows:
+        new_tags = (current_tags AND and_tags) XOR xor_tags
+      </description>
+      <arg name="identifier" type="string" summary="ext_foreign_toplevel identifier of the target client"/>
+      <arg name="and_tags" type="uint"/>
+      <arg name="xor_tags" type="uint"/>
+    </request>
+
+    <request name="set_client_urgent" since="4">
+      <description summary="Set or unset the urgent flag on a specific client by identifier"/>
+      <arg name="identifier" type="string" summary="ext_foreign_toplevel identifier of the target client"/>
+      <arg name="urgent" type="uint" summary="nonzero to set urgent, zero to unset"/>
+    </request>
   </interface>
 </protocol>
